@@ -1,0 +1,222 @@
+---
+title: "STAT 331-130 Team 4 Final Project"
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Calling necessary packages
+```{r}
+library(DescTools)
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(tree)
+library(randomForest)
+library(purrr)
+library(factoextra)
+```
+
+## Reading in the data file
+```{r}
+memory.limit()
+memory.limit(size=56000)
+
+carmax = read.csv("carmax.csv", na.strings = c("", " "), as.is =T)
+str(carmax)
+```
+
+## Converting categorical data to factors
+```{r}
+cols = c("response_id_m","customer_id_m","instore_appt_pct_helped","outbound_inbound_contacts_ratio","inbound_phone_calls_abandoned_pct","first_contact_voca_type","credit_rating","lead_category","lead_handle_type","remote_handle","staffing_level","inventory_level","avg_veh_price_band","location_m")
+carmax[ ,cols] = lapply(carmax[ ,cols],factor)
+str(carmax)
+```
+
+## Checking for missing values
+```{r}
+summary(carmax)
+PlotMiss(x= carmax, main ="Variables with Missing (NA) values")
+```
+
+## Selecting a smaller subset of the data
+```{r}
+#Removing variables that have greater than 40% of values missing
+carmax_select = carmax %>%
+  select(nps, customer_age, count_leads, count_appointments, count_curbside_promos, count_test_drives, count_appraisals, count_test_drive_reschedules, count_purchases, count_accessories, count_service_plans, count_loans_booked, count_prior_purchases, outbound_inbound_contacts_ratio, inbound_phone_duration_max, first_contact_voca_type, credit_rating, lead_category, lead_handle_type, remote_handle, staffing_level, inventory_level, avg_veh_price_band)
+
+PlotMiss(x= carmax_select, main ="Variables with Missing (NA) values") 
+```
+
+## Imputing missing values for numerical variables
+```{r}
+pp = preProcess(x = carmax_select, method = "medianImpute")
+carmax_select = predict(object = pp, newdata = carmax_select)
+
+PlotMiss(x= carmax_select, main ="Variables with Missing (NA) values")
+```
+
+## Removing NAs
+```{r}
+carmax_select = na.omit(carmax_select)
+
+PlotMiss(x= carmax_select, main ="Variables with Missing (NA) values")
+```
+
+## Checking for and removing duplicates
+```{r}
+carmax_select[duplicated(carmax_select), ] 
+carmax_select = carmax_select[!duplicated(carmax_select), ]
+summary(carmax_select)
+```
+
+## Adding new column for NPS categorization
+```{r}
+carmax_select2 <- carmax_select %>%
+  mutate(nps_cat = ifelse(nps<10, 0, 1))
+
+str(carmax_select2$nps_cat)
+carmax_select2$nps_cat <- as.factor(carmax_select2$nps_cat)
+
+summary(carmax_select2)
+attach(carmax_select2)
+```
+
+## Subsetting the data for training/testing
+```{r}
+set.seed(1)
+
+selec <- sample (1: nrow(carmax_select2), .6*nrow(carmax_select2))
+
+train_carmax <- carmax_select2[selec, ]   # this is the training data we will use to develop the model
+test_carmax <- carmax_select2[-selec, ]
+```
+
+## Logistic Regression Model
+```{r}
+#Model Development
+lr1 <- glm(nps_cat ~ customer_age + count_leads + count_appointments + count_curbside_promos + count_test_drives + count_appraisals + count_test_drive_reschedules + count_purchases + count_accessories + count_service_plans + count_loans_booked + count_prior_purchases + outbound_inbound_contacts_ratio + inbound_phone_duration_max + first_contact_voca_type + credit_rating + lead_category + lead_handle_type + remote_handle + staffing_level + inventory_level + avg_veh_price_band, data= train_carmax, family = binomial(link = "logit"))
+
+summary(lr1)
+
+
+#Model Validation
+#Apply the logistic regression model lr_model1 on test_carmax data set and create predicted values of NPS Category (binary dependent variable) in testing data
+
+# Create predicted values of NPS Category (binary dependent variable) in testing data: test_carmax
+pr_lr_Testing <- predict(lr1, newdata= test_carmax, type= "response")
+
+# Convert the predicted values of the dependent variable (test) to be re-coded as "1" if prob >0.5, or as "0" otherwise using ifelse() function
+pr_lr_coded <- ifelse(pr_lr_Testing > 0.5, 1, 0) 
+
+# Create the Confusion Matrix 
+table(test_carmax$nps_cat, pr_lr_coded) 
+
+
+#What is the precision of the logistic regression model when applied to the dei_test dataset?
+#Precision = Given the model predicted the individual Carmax earns NPS 10, how many times did Carmax actually earn NPS 10?
+
+10378/(4043+10378)*100
+#The precision of the logistic regression model when applied to the test_carmax data set is 71.96%
+
+
+#What is the recall of the logistic regression model when applied to the test_carmax data set?
+#Recall = Given Carmax earns NPS 10, how many times did the model predict it correctly? 
+
+10378/(81+10378)*100
+#The recall of the logistic regression model when applied to the test_carmax data set is 99.23%
+```
+
+
+## Clustering Analysis
+```{r}
+#Hierarchical Clustering
+#Create a data set that only includes statistically significant numerical variables
+
+carmax_select3 = carmax_select2 %>%
+  select(count_appointments, count_curbside_promos, count_service_plans, inbound_phone_duration_max)
+
+#count_leads, count_appointments, count_curbside_promos, count_service_plans, count_prior_purchases, inbound_phone_duration_max
+#Create the distance matrix between observations using dist()
+dist_data <- dist(scale(carmax_select3), method = "euclidean")
+
+gc()
+
+#Select the linkage criteria using hclust(), method can be single, complete or average
+#Error: cannot allocate vector of size 4.9 Gb
+hc_data <- hclust(dist_data, method = "complete")
+
+gc()
+
+#Define k=3 clusters using cutree() 
+cluster_ids <- cutree(hc_data, k = 3)
+
+#Visualize the resulting clusters using fviz_cluster() 
+fviz_cluster(object = list(data = carmax_select3, 
+                           cluster = cluster_ids),
+                            main = "Complete Linkage Clusters in Carmax Data", geom = "point")
+
+
+#Describe the cluster solutions by comparing the mean values across the different clusters for input (numeric) variables
+clus_means <- aggregate(carmax_select3,
+                        by = list(cluster_ids),
+                        FUN = mean)
+clus_means
+```
+
+
+## EXTRA CODE
+
+## Classification Tree Model
+```{r}
+#Visualize 
+#Outcome: nps_cat 
+plot(carmax_select2$nps_cat, col = "purple", xlab = "NPS Category [0 = NPS less than 10 or 1 = NPS 10]", main= "NPS Category Distribution") 
+
+#Explore the relationship between explanatory variables and the outcome variable using featurePlot()
+#Create a vector that contains the names of the numerical independent variables we want to explore their relationship with the outcome (dependent) variable
+
+colnames(carmax_select2)
+
+cols <- c("customer_age","count_leads","count_appointments","count_curbside_promos","count_test_drives","count_appraisals", "count_test_drive_reschedules","count_purchases","count_accessories","count_service_plans","count_loans_booked", "count_prior_purchases","inbound_phone_duration_max")
+
+#Scatter plot of pairs of independent variables, color-coded by the binary test variable
+featurePlot(x = carmax_select2[, cols],  
+            y = carmax_select2$nps_cat, 
+            plot = "pairs",
+            auto.key = list(columns = 2))
+
+#It appears that for most explanatory variables, the decision boundary is non-linear
+
+
+#Model Development
+set.seed(1)
+
+treemodel1 <- tree(nps_cat ~ customer_age + count_leads + count_appointments + count_curbside_promos + count_test_drives + count_appraisals + count_test_drive_reschedules + count_purchases + count_accessories + count_service_plans + count_loans_booked + count_prior_purchases + inbound_phone_duration_max + first_contact_voca_type + credit_rating + lead_category + lead_handle_type + remote_handle + staffing_level + inventory_level + avg_veh_price_band, train_carmax)
+summary(treemodel1)
+
+#Number of terminal nodes is 1 -- why is this the case?
+```
+
+## Random Forest Model
+```{r}
+#Model Development
+set.seed(1)
+
+rfmodel1 <- randomForest(nps_cat ~ customer_age + count_leads + count_appointments + count_curbside_promos + count_test_drives + count_appraisals + count_test_drive_reschedules + count_purchases + count_accessories + count_service_plans + count_loans_booked + count_prior_purchases + inbound_phone_duration_max + first_contact_voca_type + credit_rating + lead_category + lead_handle_type + remote_handle + staffing_level + inventory_level + avg_veh_price_band, data= train_carmax, ntree=500, mtry=2, maxnodes=5, importance = TRUE)
+rfmodel1
+
+
+#Model Validation
+yhat_rf <- predict(rfmodel1 , newdata = test_carmax)
+plot(yhat_rf, test_carmax$nps_cat)
+
+#View the importance of each variable
+importance(rfmodel1)
+
+#Produce plots of importance measures using the varImpPlot() function.
+varImpPlot(rfmodel1)
+```
+
